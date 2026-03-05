@@ -1,5 +1,6 @@
 import argparse
 import os
+import sys
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
@@ -21,38 +22,45 @@ def main():
     model = "gemini-2.5-flash"
     messages = [types.Content(role="user", parts=[types.Part(text=args.user_prompt)])]
     
-    config = types.GenerateContentConfig(
-        system_instruction=system_prompt, 
-        temperature=0,
-        tools=[available_functions],
-    )
-    generate_content = client.models.generate_content(
-        model=model, 
-        contents=messages, 
-        config=config
-    )
-    if args.verbose:
-        print(f"User prompt: {args.user_prompt}")     
-        if generate_content.usage_metadata == None:
-            raise RuntimeError("Usage metadata is None")
-        print(f"Prompt tokens: {generate_content.usage_metadata.prompt_token_count}")
-        print(f"Response tokens: {generate_content.usage_metadata.candidates_token_count}")
-    print(generate_content.text)
+    config = types.GenerateContentConfig(system_instruction=system_prompt,temperature=0,tools=[available_functions],)
+    for _ in range(20):
+        response = client.models.generate_content(model=model, contents=messages, config=config)
 
-    if generate_content.function_calls:
-        function_results = []
-        for function_call in generate_content.function_calls:
+        if response.candidates:
+            for candidate in response.candidates:
+                messages.append(candidate.content)
+
+        if args.verbose:
+            print(f"User prompt: {args.user_prompt}")     
+            if response.usage_metadata is None:
+                raise RuntimeError("Usage metadata is None")
+            print(f"Prompt tokens: {response.usage_metadata.prompt_token_count}")
+            print(f"Response tokens: {response.usage_metadata.candidates_token_count}")
+
+        if response.function_calls:
+            function_responses = handle_function_calls(response.function_calls, verbose=args.verbose)
+            messages.append(types.Content(role="user", parts=function_responses))
+        else:
+            print(response.text)
+            return
+
+    print("Agent stopped after 20 iterations without producing a final response.", file=sys.stderr)
+    sys.exit(1)
+
+def handle_function_calls(function_calls, verbose=False):
+    function_results = []
+    for function_call in function_calls:
+        if verbose:
             print(f"Calling function: {function_call.name}({function_call.args})")
-            function_call_result = call_function(function_call, verbose=args.verbose)
-            if function_call_result.parts[0].function_response == None:
-                raise Exception("Function response is empty")
-            if function_call_result.parts[0].function_response.response == None:
-                raise Exception("Function response is empty")
-            function_results.append(function_call_result.parts[0])
-            if args.verbose:
-                print(f"-> {function_call_result.parts[0].function_response.response}")
-            
-
+        function_call_result = call_function(function_call, verbose=verbose)
+        if function_call_result.parts[0].function_response == None:
+            raise Exception("Function response is empty")
+        if function_call_result.parts[0].function_response.response == None:
+            raise Exception("Function response is empty")
+        function_results.append(function_call_result.parts[0])
+        if verbose:
+            print(f"-> {function_call_result.parts[0].function_response.response}")
+    return function_results
 
 if __name__ == "__main__":
     main()
